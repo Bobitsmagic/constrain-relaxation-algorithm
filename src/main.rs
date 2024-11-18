@@ -44,8 +44,14 @@ fn main() {
         println!("{}: {}", i, x);
     }
 
-    for _ in 0..10 {
+    for _ in 0..100 {
         let (weight_grad, label_grad) = evaluate_grad(&samples, &labels, &weights, lambda);
+
+        println!("Weight Grad:");
+        print_vector(&weight_grad);
+
+        println!("Label Grad:");
+        print_vector(&label_grad);
 
         let mut full_grad = DVector::zeros(weight_grad.len() + label_grad.len());
         for i in 0..weight_grad.len() {
@@ -241,7 +247,7 @@ fn evaluate_grad(inputs: &Vec<DVector<f64>>, labels: &DVector<f64>, weights: &DV
         let y = labels[i];
         weight_grad += logistic_loss_grad(x, y).0 * v;
 
-        label_grad[i] = -logistic_loss(x, y);
+        label_grad[i] = -x;
     }
 
     (weight_grad / inputs.len() as f64, label_grad)
