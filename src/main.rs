@@ -1,7 +1,10 @@
 use std::env;
 
 use nalgebra::DVector;
-use rand::Rng;
+use rand::{distributions, prelude::Distribution, Rng, SeedableRng};
+use rand_chacha::ChaCha8Rng;
+
+type SamplePoint = nalgebra::Matrix<f64, nalgebra::Dyn, nalgebra::Const<1>, nalgebra::VecStorage<f64, nalgebra::Dyn, nalgebra::Const<1>>>;
 
 fn main() {
     // check_convexity();
@@ -10,21 +13,54 @@ fn main() {
     //enable backtrace
     env::set_var("RUST_BACKTRACE", "1");
 
-    let samples = vec![
+    test_basic_example();
+}
+
+fn test_basic_example() {
+    let mut rng = ChaCha8Rng::seed_from_u64(0);
+
+    let samples: Vec<SamplePoint> = vec![
         DVector::from_vec(vec![1.0, 0.0]),
         DVector::from_vec(vec![1.0, 1.0]),
         DVector::from_vec(vec![-1.0, 0.0]),
         DVector::from_vec(vec![-1.0, -1.0]),
     ];
 
-    let mut labels = DVector::from_vec(vec![1.0, 1.0, 0.0, 0.0]);
-
-    let mut weights = DVector::from_vec(vec![0.2, 0.1]);
-
+    let mut labels = DVector::from_vec(vec![0.0, 0.0, 0.0, 0.0]);
+    let mut weights = DVector::from_vec(vec![0.1, 0.0]);    
+    
     let learnrate = 0.1;
-    let lambda = 0.1;
+    let lambda = 0.1;   
 
-    //2 + 4 elements
+    for _ in 0..10 {
+        randomize_weights(&mut weights, 1.0, &mut rng);
+        randomize_lables(&mut labels, &mut rng);
+    
+        println!("Loss: {}", evaluate_loss(&samples, &labels, &weights));
+        // for i in 0..4 {
+        //     let v = &samples[i];
+        //     let x = v.dot(&weights);
+        //     println!("{}: {}", i, x);
+        // }
+    
+        gradient_descent(&samples, &mut labels, &mut weights, learnrate, lambda);
+    }
+}
+
+fn randomize_lables(v: &mut DVector<f64>, rng: &mut ChaCha8Rng) {
+    for i in 0..v.len() {
+        v[i] = rng.gen_range(0.0..1.0);
+    }
+}
+
+fn randomize_weights(v: &mut DVector<f64>, range: f64, rng: &mut ChaCha8Rng) {
+    
+    for i in 0..v.len() {
+        v[i] = rng.sample::<f64, _>(distributions::Standard) * range;
+    }
+}
+
+fn gradient_descent(samples: &Vec<SamplePoint>, labels: &mut DVector<f64>, weights: &mut DVector<f64>, learnrate: f64, lambda: f64) {
     let mut linear_inequalities = Vec::new();
 
     for i in 0..4 {
@@ -36,22 +72,14 @@ fn main() {
         linear_inequalities.push((v, 0.0));
     }
 
-
-    println!("Loss: {}", evaluate_loss(&samples, &labels, &weights));
-    for i in 0..4 {
-        let v = &samples[i];
-        let x = v.dot(&weights);
-        println!("{}: {}", i, x);
-    }
-
     for _ in 0..100 {
         let (weight_grad, label_grad) = evaluate_grad(&samples, &labels, &weights, lambda);
 
-        println!("Weight Grad:");
-        print_vector(&weight_grad);
+        // println!("Weight Grad:");
+        // print_vector(&weight_grad);
 
-        println!("Label Grad:");
-        print_vector(&label_grad);
+        // println!("Label Grad:");
+        // print_vector(&label_grad);
 
         let mut full_grad = DVector::zeros(weight_grad.len() + label_grad.len());
         for i in 0..weight_grad.len() {
@@ -72,8 +100,8 @@ fn main() {
 
         let step = - learnrate * full_grad;
 
-        println!("Step:");
-        print_vector(&step);
+        // println!("Step:");
+        // print_vector(&step);
 
         let new_step = project_search_direction(&full_pos, &step, &linear_inequalities);
 
@@ -85,17 +113,18 @@ fn main() {
         // println!("Clip:");
         // print_vector(&new_step);
 
-        weights += new_step.rows(0, weight_grad.len()).clone_owned();
-        labels += new_step.rows(weight_grad.len(), label_grad.len()).clone_owned();
+        *weights += new_step.rows(0, weight_grad.len()).clone_owned();
+        *labels += new_step.rows(weight_grad.len(), label_grad.len()).clone_owned();
         
-        println!("Loss: {}", evaluate_loss(&samples, &labels, &weights));
-
         
-        println!("Labels");
-        print_vector(&labels);
-        // println!("Weights: {:?}", weights);
     }
-    
+    println!("Loss: {}", evaluate_loss(&samples, &labels, &weights));
+
+    println!("Labels");
+    print_vector(&labels);
+    println!("Weights");
+    print_vector(&weights);
+    // println!("Weights: {:?}", weights);
 }
 
 fn print_vector(v: &DVector<f64>) {
