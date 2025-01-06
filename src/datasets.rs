@@ -39,11 +39,7 @@ pub fn iris_data() -> Vec<SamplePoint> {
 
     let mut samples = Vec::new();
 
-    // for i in 0..50 {
-    //     lines.next();
-    // }
-
-    for i in 0..100 {
+    for _ in 0..100 {
         let split = lines.next().unwrap().split(",").collect::<Vec<&str>>();
 
         let mut vals = split.iter().take(4).map(|x| x.parse::<f64>().unwrap()).collect::<Vec<f64>>();
