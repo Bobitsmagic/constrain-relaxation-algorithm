@@ -1,10 +1,14 @@
+use core::panic;
 use std::env;
-
+use datasets::SamplePoint;
 use nalgebra::DVector;
 use rand::{distributions, prelude::Distribution, Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
+use rand_distr::Normal;
 
-type SamplePoint = nalgebra::Matrix<f64, nalgebra::Dyn, nalgebra::Const<1>, nalgebra::VecStorage<f64, nalgebra::Dyn, nalgebra::Const<1>>>;
+mod datasets;
+
+
 
 fn main() {
     // check_convexity();
@@ -19,24 +23,18 @@ fn main() {
 fn test_basic_example() {
     let mut rng = ChaCha8Rng::seed_from_u64(0);
 
-    let samples: Vec<SamplePoint> = vec![
-        DVector::from_vec(vec![1.0, 0.0]),
-        DVector::from_vec(vec![1.0, 1.0]),
-        DVector::from_vec(vec![-1.0, 0.0]),
-        DVector::from_vec(vec![-1.0, -1.0]),
-    ];
+    let samples = datasets::basic_example();
 
-    let mut labels = DVector::from_vec(vec![0.0, 0.0, 0.0, 0.0]);
-    let mut weights = DVector::from_vec(vec![0.1, 0.0]);    
+    let (mut labels, mut weights) = datasets::gen_parameter(&samples);
     
-    let learnrate = 0.1;
-    let lambda = 0.1;   
+    let learnrate = 0.01;
+    let lambda = 0.5;   
 
-    for _ in 0..10 {
+    for _ in 0..1 {
         randomize_weights(&mut weights, 1.0, &mut rng);
         randomize_lables(&mut labels, &mut rng);
     
-        println!("Loss: {}", evaluate_loss(&samples, &labels, &weights));
+        // println!("Loss: {}", evaluate_loss(&samples, &labels, &weights, lambda));
         // for i in 0..4 {
         //     let v = &samples[i];
         //     let x = v.dot(&weights);
@@ -54,27 +52,34 @@ fn randomize_lables(v: &mut DVector<f64>, rng: &mut ChaCha8Rng) {
 }
 
 fn randomize_weights(v: &mut DVector<f64>, range: f64, rng: &mut ChaCha8Rng) {
-    
+    let normal = Normal::new(0.0, range).unwrap();
     for i in 0..v.len() {
-        v[i] = rng.sample::<f64, _>(distributions::Standard) * range;
+        v[i] = normal.sample(rng);
     }
 }
 
 fn gradient_descent(samples: &Vec<SamplePoint>, labels: &mut DVector<f64>, weights: &mut DVector<f64>, learnrate: f64, lambda: f64) {
     let mut linear_inequalities = Vec::new();
 
-    for i in 0..4 {
-        let mut v = DVector::zeros(6);
-        v[i + 2] = 1.0;
+    // println!("Start");
+    // print_vector(&weights);
+    // print_vector(&labels);
+
+    let weight_count = weights.len();
+    for i in 0..labels.len() {
+        let mut v = DVector::zeros(weight_count + labels.len());
+        v[weight_count + i] = 1.0;
         linear_inequalities.push((v.clone(), 1.0));
 
-        v[i + 2] = -1.0;
+        v[weight_count + i] = -1.0;
         linear_inequalities.push((v, 0.0));
     }
 
-    for _ in 0..100 {
+    for _ in 0..200 {
         let (weight_grad, label_grad) = evaluate_grad(&samples, &labels, &weights, lambda);
 
+        // println!("Weights:");
+        // print_vector(&weights);
         // println!("Weight Grad:");
         // print_vector(&weight_grad);
 
@@ -98,10 +103,11 @@ fn gradient_descent(samples: &Vec<SamplePoint>, labels: &mut DVector<f64>, weigh
             full_pos[i + weight_grad.len()] = labels[i];
         }
 
+        //Invert direction of gradient
         let step = - learnrate * full_grad;
 
-        // println!("Step:");
-        // print_vector(&step);
+        println!("Step:");
+        print_vector(&step);
 
         let new_step = project_search_direction(&full_pos, &step, &linear_inequalities);
 
@@ -115,15 +121,21 @@ fn gradient_descent(samples: &Vec<SamplePoint>, labels: &mut DVector<f64>, weigh
 
         *weights += new_step.rows(0, weight_grad.len()).clone_owned();
         *labels += new_step.rows(weight_grad.len(), label_grad.len()).clone_owned();
-        
-        
-    }
-    println!("Loss: {}", evaluate_loss(&samples, &labels, &weights));
 
-    println!("Labels");
+        println!("{}", evaluate_loss(&samples, &labels, &weights, lambda));
+    }
+    
+
     print_vector(&labels);
-    println!("Weights");
+    // println!("Weights");
     print_vector(&weights);
+
+    if labels.iter().any(|x| *x < 0.5) {
+        // println!("Labels");
+
+        // panic!("Labels not in range");
+    }
+
     // println!("Weights: {:?}", weights);
 }
 
@@ -234,52 +246,60 @@ fn check_convexity() {
     println!("Convex: {}%", convex as f64 / (COUNT * 10) as f64 * 100.0);
 }
 
-fn logistic_loss(x: f64, y: f64) -> f64 {
-    -x * y + (1.0 + x.exp()).ln()
+fn logistic_loss(r: f64, y: f64) -> f64 {
+    -r * y + (1.0 + r.exp()).ln()
 }
 
-fn logistic_loss_grad(x: f64, y: f64) -> (f64, f64) {
-    (1.0 / (1.0 + x.exp()) - y, -x)
+fn logistic_loss_grad(r: f64, y: f64) -> f64 {
+    1.0 / (1.0 + r.exp()) - y
 }
 
-fn evaluate_loss(inputs: &Vec<DVector<f64>>, labels: &DVector<f64>, weights: &DVector<f64>) -> f64 {
-    let mut loss = 0.0;
+fn evaluate_loss(inputs: &Vec<DVector<f64>>, labels: &DVector<f64>, weights: &DVector<f64>, lambda: f64) -> f64 {
+    let reg_loss = lambda * regularizer(weights);
+    let mut sample_loss = 0.0;
     for i in 0..inputs.len() {
-        let v = &inputs[i];
-        let x = v.dot(&weights);
+        let x = &inputs[i];
+        let f = x.dot(&weights);
 
         let y = labels[i];
-        loss += logistic_loss(x, y);
+        sample_loss += logistic_loss(f, y);
     }
 
-    loss / inputs.len() as f64
+    sample_loss + reg_loss
 }
 
 fn regularizer(weights: &DVector<f64>) -> f64 {
     weights.dot(weights) * 0.5
 }
 
+fn regularizer_grad(weights: &DVector<f64>) -> DVector<f64> {
+    weights.clone() 
+}
+
 fn evaluate_grad(inputs: &Vec<DVector<f64>>, labels: &DVector<f64>, weights: &DVector<f64>, lambda: f64) -> (DVector<f64>, DVector<f64>) {
     let mut weight_grad = DVector::zeros(weights.len());
-
-    //regularizer
-    for i in 0..weights.len() {
-        weight_grad[i] = lambda * regularizer(weights);
-    }
-
     let mut label_grad = DVector::zeros(inputs.len());
     
     for i in 0..inputs.len() {
-        let v = &inputs[i];
-        let x = v.dot(&weights);
+        let x = &inputs[i];
+        let f = x.dot(&weights);
         
         let y = labels[i];
-        weight_grad += logistic_loss_grad(x, y).0 * v;
+        weight_grad += logistic_loss_grad(f, y) * x;
 
-        label_grad[i] = -x;
+        label_grad[i] = -f;
     }
 
-    (weight_grad / inputs.len() as f64, label_grad)
+    // println!("## Sample Grad:");
+    // print_vector(&weight_grad);
+
+    let reg_grad = regularizer_grad(weights);
+    // println!("## Regularizer Grad:");
+    // print_vector(&reg_grad);
+
+    weight_grad += lambda * reg_grad;
+
+    (weight_grad, label_grad)
 }
 
 //step = -learnrate * gradient 
