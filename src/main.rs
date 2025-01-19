@@ -17,7 +17,7 @@ fn main() {
 }
 
 fn test_basic_example() {
-    let mut rng = ChaCha8Rng::seed_from_u64(0);
+    let mut rng = ChaCha8Rng::seed_from_u64(1);
 
     let samples = datasets::basic_example();
 
@@ -30,6 +30,7 @@ fn test_basic_example() {
         randomize_weights(&mut weights, 1.0, &mut rng);
         randomize_lables(&mut labels, &mut rng);    
 
+        // descent(&samples, &mut labels, &mut weights, learnrate, lambda, &mut rng);
         gradient_descent(&samples, &mut labels, &mut weights, learnrate, lambda);
     }
 }
@@ -47,6 +48,98 @@ fn randomize_weights(v: &mut DVector<f64>, deviation: f64, rng: &mut ChaCha8Rng)
     for i in 0..v.len() {
         v[i] = normal.sample(rng);
     }
+}
+
+fn descent(samples: &Vec<SamplePoint>, labels: &mut DVector<f64>, weights: &mut DVector<f64>, learnrate: f64, lambda: f64, rng: &mut ChaCha8Rng) {
+    let mut linear_inequalities = Vec::new();
+
+    // println!("Start weights");
+    // print_vector(&weights);
+    // print_vector(&labels);
+
+    //Add constraints for labels to be in range [0, 1]
+    //They have the form: w_1 * x_1 + ... + w_N * x_N + w_(N + 1) * l_1 + ... + w_(N + L) <= Bias
+
+    let weight_count = weights.len();
+    let label_count = labels.len();
+    for i in 0..labels.len() {
+        let mut v = DVector::zeros(weight_count + labels.len());
+        v[weight_count + i] = 1.0;
+        linear_inequalities.push((v.clone(), 1.0)); //l_i <= 1
+
+        v[weight_count + i] = -1.0;
+        linear_inequalities.push((v, 0.0)); //-l_i <= 0
+    }
+
+    let mut current_error = evaluate_loss(&samples, &labels, &weights, lambda);
+
+    let dim_count = weights.len() + labels.len();
+
+    for _ in 0..200000 {
+        
+
+        // println!("Weights:");
+        // print_vector(&weights);
+        // println!("Weight Grad:");
+        // print_vector(&weight_grad);
+
+        // println!("Label Grad:");
+        // print_vector(&label_grad);
+
+        //Combine weight and label gradients to one vector
+        let mut step_direction = DVector::zeros(dim_count);
+        randomize_weights(&mut step_direction, 1.0, rng);
+
+        step_direction = step_direction.normalize();
+
+        //Combine weights and labels to one vector
+        let mut full_pos = DVector::zeros(dim_count);
+        for i in 0..weight_count {
+            full_pos[i] = weights[i];
+        }
+        for i in 0..labels.len() {
+            full_pos[i + weight_count] = labels[i];
+        }
+
+        //Invert direction of gradient
+        let step = -learnrate * step_direction;
+
+        // println!("Step:");
+        // print_vector(&step);
+
+        let new_step = project_search_direction(&full_pos, &step, &linear_inequalities);
+
+        // println!("Projection:");
+        // print_vector(&new_step);
+
+        let new_step = clip_to_constraint(&full_pos, &new_step, &linear_inequalities);
+
+        // println!("Clip:");
+        // print_vector(&new_step);
+
+        //Update weights and labels
+
+        let new_weights = weights.clone() + new_step.rows(0, weight_count).clone_owned();
+        let new_labels = labels.clone() + new_step.rows(weight_count, label_count).clone_owned();
+
+        let new_error = evaluate_loss(&samples, &new_labels, &new_weights, lambda);
+
+        if new_error < current_error {
+            *weights = new_weights;
+            *labels = new_labels;
+            current_error = new_error;
+
+            print!("Loss: {:.3}\t Lables: ", new_error);
+            print_vector(&labels);
+        }
+
+    }
+    
+    println!("Final labels");
+    print_vector(&labels);
+    println!("Final weights");
+    print_vector(&weights);
+    println!();
 }
 
 fn gradient_descent(samples: &Vec<SamplePoint>, labels: &mut DVector<f64>, weights: &mut DVector<f64>, learnrate: f64, lambda: f64) {
@@ -121,6 +214,9 @@ fn gradient_descent(samples: &Vec<SamplePoint>, labels: &mut DVector<f64>, weigh
 
         print!("Loss: {:.3}\t Lables: ", evaluate_loss(&samples, &labels, &weights, lambda));
         print_vector(&labels);
+        print_vector(&weights);
+
+        // println!("{:.3}", evaluate_loss(&samples, &labels, &weights, lambda));
     }
     
     println!("Final labels");
