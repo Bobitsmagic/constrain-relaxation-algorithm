@@ -30,8 +30,8 @@ fn test_basic_example() {
         randomize_weights(&mut weights, 1.0, &mut rng);
         randomize_lables(&mut labels, &mut rng);    
 
-        // descent(&samples, &mut labels, &mut weights, learnrate, lambda, &mut rng);
-        gradient_descent(&samples, &mut labels, &mut weights, learnrate, lambda);
+        descent(&samples, &mut labels, &mut weights, learnrate, lambda, &mut rng);
+        // gradient_descent(&samples, &mut labels, &mut weights, learnrate, lambda);
     }
 }
 
@@ -53,10 +53,6 @@ fn randomize_weights(v: &mut DVector<f64>, deviation: f64, rng: &mut ChaCha8Rng)
 fn descent(samples: &Vec<SamplePoint>, labels: &mut DVector<f64>, weights: &mut DVector<f64>, learnrate: f64, lambda: f64, rng: &mut ChaCha8Rng) {
     let mut linear_inequalities = Vec::new();
 
-    // println!("Start weights");
-    // print_vector(&weights);
-    // print_vector(&labels);
-
     //Add constraints for labels to be in range [0, 1]
     //They have the form: w_1 * x_1 + ... + w_N * x_N + w_(N + 1) * l_1 + ... + w_(N + L) <= Bias
 
@@ -75,17 +71,7 @@ fn descent(samples: &Vec<SamplePoint>, labels: &mut DVector<f64>, weights: &mut 
 
     let dim_count = weights.len() + labels.len();
 
-    for _ in 0..200000 {
-        
-
-        // println!("Weights:");
-        // print_vector(&weights);
-        // println!("Weight Grad:");
-        // print_vector(&weight_grad);
-
-        // println!("Label Grad:");
-        // print_vector(&label_grad);
-
+    for _ in 0..2000000 {
         //Combine weight and label gradients to one vector
         let mut step_direction = DVector::zeros(dim_count);
         randomize_weights(&mut step_direction, 1.0, rng);
@@ -145,10 +131,6 @@ fn descent(samples: &Vec<SamplePoint>, labels: &mut DVector<f64>, weights: &mut 
 fn gradient_descent(samples: &Vec<SamplePoint>, labels: &mut DVector<f64>, weights: &mut DVector<f64>, learnrate: f64, lambda: f64) {
     let mut linear_inequalities = Vec::new();
 
-    // println!("Start weights");
-    // print_vector(&weights);
-    // print_vector(&labels);
-
     //Add constraints for labels to be in range [0, 1]
     //They have the form: w_1 * x_1 + ... + w_N * x_N + w_(N + 1) * l_1 + ... + w_(N + L) <= Bias
 
@@ -162,16 +144,8 @@ fn gradient_descent(samples: &Vec<SamplePoint>, labels: &mut DVector<f64>, weigh
         linear_inequalities.push((v, 0.0)); //-l_i <= 0
     }
 
-    for _ in 0..200 {
+    for _ in 0..2000 {
         let (weight_grad, label_grad) = evaluate_grad(&samples, &labels, &weights, lambda);
-
-        // println!("Weights:");
-        // print_vector(&weights);
-        // println!("Weight Grad:");
-        // print_vector(&weight_grad);
-
-        // println!("Label Grad:");
-        // print_vector(&label_grad);
 
         //Combine weight and label gradients to one vector
         let mut full_grad = DVector::zeros(weight_grad.len() + label_grad.len());
@@ -212,12 +186,12 @@ fn gradient_descent(samples: &Vec<SamplePoint>, labels: &mut DVector<f64>, weigh
         *weights += new_step.rows(0, weight_grad.len()).clone_owned();
         *labels += new_step.rows(weight_grad.len(), label_grad.len()).clone_owned();
 
-        print!("Loss: {:.3}\t Lables: ", evaluate_loss(&samples, &labels, &weights, lambda));
-        print_vector(&labels);
-        print_vector(&weights);
+        // print!("Loss: {:.3}\t Lables: ", evaluate_loss(&samples, &labels, &weights, lambda));
+        // print_vector(&labels);
+        // print_vector(&weights);
 
-        // println!("{:.3}", evaluate_loss(&samples, &labels, &weights, lambda));
     }
+    println!("{:.3}", evaluate_loss(&samples, &labels, &weights, lambda));
     
     println!("Final labels");
     print_vector(&labels);
@@ -239,7 +213,7 @@ fn logistic_loss(r: f64, y: f64) -> f64 {
 
 //loss gradient with respect to r
 fn logistic_loss_grad(r: f64, y: f64) -> f64 {
-    1.0 / (1.0 + r.exp()) - y
+    1.0 / (1.0 + (-r).exp()) - y
 }
 
 fn regularizer_loss(weights: &DVector<f64>) -> f64 {
@@ -270,16 +244,20 @@ fn evaluate_grad(inputs: &Vec<DVector<f64>>, labels: &DVector<f64>, weights: &DV
     
     for i in 0..inputs.len() {
         let x = &inputs[i];
+
+        print!("## Sample:");
+        print_vector(&x);
+
         let f = x.dot(&weights);
-        
+
         let y = labels[i];
         weight_grad += logistic_loss_grad(f, y) * x;
 
         label_grad[i] = -f; //loss gradient with respect to the label
     }
 
-    // println!("## Sample Grad:");
-    // print_vector(&weight_grad);
+    print!("## Weight grad sum:");
+    print_vector(&weight_grad);
 
     let reg_grad = regularizer_loss_grad(weights);
     // println!("## Regularizer Grad:");
