@@ -17,21 +17,60 @@ fn main() {
 }
 
 fn test_basic_example() {
-    let mut rng = ChaCha8Rng::seed_from_u64(1);
+    let mut rng = ChaCha8Rng::seed_from_u64(2);
 
-    let samples = datasets::basic_example();
+    let samples = datasets::iris_data();
 
     let (mut labels, mut weights) = datasets::gen_parameter(&samples);
     
-    let learnrate = 0.01; 
-    let lambda = 0.5;   //Regularization parameter
+    let label_count = labels.len();
+    let weight_count = weights.len();
 
-    for _ in 0..1 {
+    let learnrate = 0.01; 
+    let lambda = 0.01;   //Regularization parameter
+
+    for _ in 0..100 {
         randomize_weights(&mut weights, 1.0, &mut rng);
         randomize_lables(&mut labels, &mut rng);    
 
-        descent(&samples, &mut labels, &mut weights, learnrate, lambda, &mut rng);
-        // gradient_descent(&samples, &mut labels, &mut weights, learnrate, lambda);
+        let mut linear_inequalities = is_label_inequalities(&labels, &weights);
+
+        linear_inequalities.push(set_label_value_zero(weights.len(), labels.len(), 0));
+        linear_inequalities.push(set_label_value_one(weights.len(), labels.len(), labels.len() - 1));
+
+        labels[0] = 0.0;
+        // labels[1] = 0.0;
+        // labels[2] = 0.0;
+
+        // labels[3] = 1.0;
+        // labels[4] = 1.0;
+        // labels[5] = 1.0;
+
+        // weights[0] = -2.0;
+        // weights[1] = 1.0;
+        // weights[2] = 1.0;
+
+        labels[label_count- 1] = 1.0;
+
+        // descent(&samples, &mut labels, &mut weights, learnrate, lambda, &linear_inequalities, &mut rng);
+        gradient_descent(&samples, &mut labels, &mut weights, &linear_inequalities, learnrate, lambda);
+
+        let mut zero_count = 0;
+        let mut one_count = 0;
+
+        for i in 0..label_count {
+            if labels[i] < 0.5 {
+                zero_count += 1;
+            } else {
+                one_count += 1;
+            }
+        }
+
+        println!("Zero count: {} One count: {}", zero_count, one_count);
+
+        if zero_count == 50 {
+            print_vector(&labels);
+        }
     }
 }
 
@@ -50,14 +89,14 @@ fn randomize_weights(v: &mut DVector<f64>, deviation: f64, rng: &mut ChaCha8Rng)
     }
 }
 
-fn descent(samples: &Vec<SamplePoint>, labels: &mut DVector<f64>, weights: &mut DVector<f64>, learnrate: f64, lambda: f64, rng: &mut ChaCha8Rng) {
+//assures that labels are in range [0, 1]
+fn is_label_inequalities(labels: &DVector<f64>, weights: &DVector<f64>) -> Vec<(DVector<f64>, f64)> {
     let mut linear_inequalities = Vec::new();
 
     //Add constraints for labels to be in range [0, 1]
     //They have the form: w_1 * x_1 + ... + w_N * x_N + w_(N + 1) * l_1 + ... + w_(N + L) <= Bias
 
     let weight_count = weights.len();
-    let label_count = labels.len();
     for i in 0..labels.len() {
         let mut v = DVector::zeros(weight_count + labels.len());
         v[weight_count + i] = 1.0;
@@ -67,12 +106,34 @@ fn descent(samples: &Vec<SamplePoint>, labels: &mut DVector<f64>, weights: &mut 
         linear_inequalities.push((v, 0.0)); //-l_i <= 0
     }
 
+    linear_inequalities
+}
+
+
+const EPSILON: f64 = 0.0001;
+//assures that a label is between 0 and EPSILON
+fn set_label_value_zero(weight_count: usize, label_count: usize, index: usize) -> (DVector<f64>, f64) {
+    let mut v = DVector::zeros(weight_count + label_count);
+    v[weight_count + index] = 1.0;
+    return (v, EPSILON); //l_i <= EPSILON
+}
+
+//assures that a label is between 0 and EPSILON
+fn set_label_value_one(weight_count: usize, label_count: usize, index: usize) -> (DVector<f64>, f64) {
+    let mut v = DVector::zeros(weight_count + label_count);
+    v[weight_count + index] = -1.0;
+    return (v, EPSILON - 1.0); //l_i >= 1 - EPSILON <=> -l_i <= EPSILON - 1
+}
+
+fn descent(samples: &Vec<SamplePoint>, labels: &mut DVector<f64>, weights: &mut DVector<f64>, learnrate: f64, lambda: f64, linear_inequalities: &Vec<(DVector<f64>, f64)>, rng: &mut ChaCha8Rng) {
     let mut current_error = evaluate_loss(&samples, &labels, &weights, lambda);
 
     let dim_count = weights.len() + labels.len();
+    let weight_count = weights.len();
+    let label_count = labels.len();
 
-    for _ in 0..2000000 {
-        //Combine weight and label gradients to one vector
+    for _ in 0..2000 {
+        //Create random search direction
         let mut step_direction = DVector::zeros(dim_count);
         randomize_weights(&mut step_direction, 1.0, rng);
 
@@ -93,20 +154,28 @@ fn descent(samples: &Vec<SamplePoint>, labels: &mut DVector<f64>, weights: &mut 
         // println!("Step:");
         // print_vector(&step);
 
-        let new_step = project_search_direction(&full_pos, &step, &linear_inequalities);
+        let projected = project_search_direction(&full_pos, &step, &linear_inequalities);
+
+        if projected.norm_squared() > step.norm_squared() {
+            println!("Overshoot");
+        }
 
         // println!("Projection:");
         // print_vector(&new_step);
 
-        let new_step = clip_to_constraint(&full_pos, &new_step, &linear_inequalities);
+        let clipped_step = clip_to_constraint(&full_pos, &projected, &linear_inequalities);
+
+        if clipped_step.norm_squared() > projected.norm_squared() {
+            println!("Clipped overshoot {} / {} {}", clipped_step.norm_squared(), projected.norm_squared(), clipped_step.norm_squared() / projected.norm_squared());
+        }
 
         // println!("Clip:");
         // print_vector(&new_step);
 
         //Update weights and labels
 
-        let new_weights = weights.clone() + new_step.rows(0, weight_count).clone_owned();
-        let new_labels = labels.clone() + new_step.rows(weight_count, label_count).clone_owned();
+        let new_weights = weights.clone() + clipped_step.rows(0, weight_count).clone_owned();
+        let new_labels = labels.clone() + clipped_step.rows(weight_count, label_count).clone_owned();
 
         let new_error = evaluate_loss(&samples, &new_labels, &new_weights, lambda);
 
@@ -128,22 +197,7 @@ fn descent(samples: &Vec<SamplePoint>, labels: &mut DVector<f64>, weights: &mut 
     println!();
 }
 
-fn gradient_descent(samples: &Vec<SamplePoint>, labels: &mut DVector<f64>, weights: &mut DVector<f64>, learnrate: f64, lambda: f64) {
-    let mut linear_inequalities = Vec::new();
-
-    //Add constraints for labels to be in range [0, 1]
-    //They have the form: w_1 * x_1 + ... + w_N * x_N + w_(N + 1) * l_1 + ... + w_(N + L) <= Bias
-
-    let weight_count = weights.len();
-    for i in 0..labels.len() {
-        let mut v = DVector::zeros(weight_count + labels.len());
-        v[weight_count + i] = 1.0;
-        linear_inequalities.push((v.clone(), 1.0)); //l_i <= 1
-
-        v[weight_count + i] = -1.0;
-        linear_inequalities.push((v, 0.0)); //-l_i <= 0
-    }
-
+fn gradient_descent(samples: &Vec<SamplePoint>, labels: &mut DVector<f64>, weights: &mut DVector<f64>, linear_inequalities: &Vec<(DVector<f64>, f64)>, learnrate: f64, lambda: f64) {
     for _ in 0..2000 {
         let (weight_grad, label_grad) = evaluate_grad(&samples, &labels, &weights, lambda);
 
@@ -191,13 +245,15 @@ fn gradient_descent(samples: &Vec<SamplePoint>, labels: &mut DVector<f64>, weigh
         // print_vector(&weights);
 
     }
-    println!("{:.3}", evaluate_loss(&samples, &labels, &weights, lambda));
+    // print!("Loss {:.3} ", evaluate_loss(&samples, &labels, &weights, lambda));
     
-    println!("Final labels");
-    print_vector(&labels);
-    println!("Final weights");
-    print_vector(&weights);
-    println!();
+    // print!("Final labels ");
+    // print_vector(&labels);
+    // println!("Final weights");
+    // print_vector(&weights);
+
+    // println!("{:.3} x + {:.3} y <= {:.3}", weights[1], weights[2], -weights[0]);
+    // println!();
 }
 
 fn print_vector(v: &DVector<f64>) {
@@ -245,8 +301,8 @@ fn evaluate_grad(inputs: &Vec<DVector<f64>>, labels: &DVector<f64>, weights: &DV
     for i in 0..inputs.len() {
         let x = &inputs[i];
 
-        print!("## Sample:");
-        print_vector(&x);
+        // print!("## Sample:");
+        // print_vector(&x);
 
         let f = x.dot(&weights);
 
@@ -256,8 +312,8 @@ fn evaluate_grad(inputs: &Vec<DVector<f64>>, labels: &DVector<f64>, weights: &DV
         label_grad[i] = -f; //loss gradient with respect to the label
     }
 
-    print!("## Weight grad sum:");
-    print_vector(&weight_grad);
+    // print!("## Weight grad sum:");
+    // print_vector(&weight_grad);
 
     let reg_grad = regularizer_loss_grad(weights);
     // println!("## Regularizer Grad:");
@@ -275,12 +331,13 @@ fn clip_to_constraint(pos: &DVector<f64>, step: &DVector<f64>, linear_inequaliti
     //Find first contraint that is hit
     for (normal, bias) in linear_inequalities {
         let alpha = (bias - normal.dot(&pos)) / normal.dot(&step);
-        if alpha < min_alpha && step.dot(&normal) > 0.0 {
+        if alpha < min_alpha && step.dot(&normal) > 0.001 && alpha >= 0.0 {
             min_alpha = alpha;
         }
     }
 
     step * min_alpha
+
 }
 
 fn project_search_direction(pos: &DVector<f64>, step: &DVector<f64>, linear_inequalities: &Vec<(DVector<f64>, f64)>) -> DVector<f64> {
