@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+microlp = "0.2.9"
 nalgebra = "0.33.2"
 rand = "0.8.5"
 rand_chacha = "0.3.1"
