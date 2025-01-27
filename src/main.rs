@@ -40,7 +40,10 @@ fn test_basic_example() {
 
         let zero_var = rng.gen_range(0..50);
         let one_var = rng.gen_range(50..100);
- 
+        labels[zero_var] = 0.0;
+        labels[one_var] = 1.0;
+        println!("Init loss: {:.2}", evaluate_loss(&samples, &labels, &weights, lambda));
+
         //Constraints for just 2 labels
         let mut linear_equalities = Vec::new();
         linear_equalities.push(set_label_value_zero(2, 0));
@@ -56,12 +59,10 @@ fn test_basic_example() {
         linear_equalities.push(set_label_value_zero(label_count, zero_var));
         linear_equalities.push(set_label_value_one(label_count, one_var));
         
-        labels[zero_var] = 0.0;
-        labels[one_var] = 1.0;
         
-        println!("Initial weights:");
-        print_vector(&weights);
-        println!("Loss: {}", evaluate_loss(&samples, &labels, &weights, lambda));
+        // println!("Initial weights:");
+        // print_vector(&weights);
+        println!("GD1 loss:  {:.2}", evaluate_loss(&samples, &labels, &weights, lambda));
         // println!("Constraints hit: {}", all_constraints_hit(&labels, &Vec::new(), &linear_equalities));
         
         let mut linear_inequalities = is_label_inequalities(label_count);
@@ -72,9 +73,9 @@ fn test_basic_example() {
         
         lp_solver::solve_linear(&samples, &mut labels, &mut weights, &linear_inequalities, &linear_equalities);
 
-        println!("Initial labels:");
-        // print_vector(&labels);
-        println!("Loss: {}", evaluate_loss(&samples, &labels, &weights, lambda));
+        // println!("Initial labels:");
+        // // print_vector(&labels);
+        println!("Lp loss:   {:.2}", evaluate_loss(&samples, &labels, &weights, lambda));
 
         println!("Correct count: {}", evaluate_iris_labels(&mut labels));
 
@@ -85,24 +86,8 @@ fn test_basic_example() {
 
         let correct_count = evaluate_iris_labels(&mut labels);
         correct += (correct_count == 100) as i32;
-        println!("Loss: {}", evaluate_loss(&samples, &labels, &weights, lambda));
-        println!("Correct count: {}", correct_count);
-        
-        if evaluate_loss(&samples, &labels, &weights, lambda).abs() > 100.0 {
-            println!("Final weights:");
-            print_vector(&weights);
-            println!("Final labels:");
-            print_vector(&labels);
-            println!("Constraints hit: {}", all_constraints_hit(&labels, &linear_inequalities, &linear_equalities));
-
-            panic!();
-        }
-
+        println!("GD loss:   {:.2}", evaluate_loss(&samples, &labels, &weights, lambda));
         // println!("Correct count: {}", correct_count);
-
-        // if correct_count >= 95 {
-        //     print_vector(&labels);
-        // }
     }
 
     println!("Correct: {}/{} = {:.2}%", correct, it_count, correct as f64 / it_count as f64 * 100.0);
@@ -124,7 +109,7 @@ fn evaluate_iris_labels(labels: &mut DVector<f64>) -> i32 {
         }
     }
 
-    println!("Int count: {}", int_count);
+    // println!("Int count: {}", int_count);
 
     correct_count
 }

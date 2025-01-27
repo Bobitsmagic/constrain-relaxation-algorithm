@@ -45,7 +45,7 @@ pub fn solve_linear(samples: &Vec<SamplePoint>, labels_pos: &mut DVector<f64>, w
     
     let solution = problem.solve().unwrap();
 
-    println!("Lp obj: {}", solution.objective());
+    // println!("Lp obj: {}", solution.objective());
 
     for i in 0..vars.len() {
         labels_pos[i] = solution[vars[i]];
