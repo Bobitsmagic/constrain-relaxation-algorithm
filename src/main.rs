@@ -1,7 +1,7 @@
 use core::panic;
 use std::env;
 use datasets::SamplePoint;
-use helper_functions::{evaluate_grad, evaluate_loss, logistic_loss, logistic_loss_grad, regularizer_loss, regularizer_loss_grad};
+use helper_functions::{evaluate_grad, evaluate_grad_n_valued, evaluate_loss, evaluate_loss_n_valued, logistic_loss, logistic_loss_grad, regularizer_loss, regularizer_loss_grad};
 use nalgebra::{one, DVector};
 use rand::{prelude::Distribution, Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -16,15 +16,74 @@ fn main() {
     //enable backtrace
     env::set_var("RUST_BACKTRACE", "1");
     
-    test_basic_example();
+    // test_2_valued_example();
+    test_n_valued_example();
 }
 
-fn test_basic_example() {
+fn test_n_valued_example() {
     let mut rng = ChaCha8Rng::seed_from_u64(3);
 
-    let samples = datasets::iris_data();
+    let samples = datasets::trippel_example();
+    // let samples = datasets::iris_data_3();
 
-    let (mut labels, mut weights) = datasets::gen_parameter(&samples);
+    let (mut labels, mut weights) = datasets::gen_parameter_n_valued(&samples, 3);
+    
+    let label_count = labels.len();
+
+    let learnrate = 0.0001; 
+    let lambda = 0.01;   //Regularization parameter
+
+    let it_count = 1;
+    let mut correct = 0;
+
+    for _ in 0..it_count {
+        randomize_weights(&mut weights, 1.0, &mut rng);
+        randmoize_n_labels(&mut labels, &mut rng, 3);    
+
+        // println!("Init loss: {:.2}", evaluate_loss_n_valued(&samples, &labels, &weights, lambda));
+        print_state(&samples, &labels, &weights, lambda);
+
+        let mut linear_equalities = Vec::new();
+        for i in (0..label_count).step_by(3) {
+            let value = 1.0 / 3.0_f64.sqrt();
+            let mut v = DVector::zeros(label_count);
+            v[i + 0] = value;
+            v[i + 1] = value;
+            v[i + 2] = value;
+
+            linear_equalities.push((v, value));
+        }
+        
+        let linear_inequalities = is_label_inequalities(label_count);
+        
+        gradient_descent_n_valued(&samples, &mut labels, &mut weights, &linear_inequalities, &linear_equalities, learnrate, lambda);
+
+        println!("GD loss:   {:.2}", evaluate_loss_n_valued(&samples, &labels, &weights, lambda));
+        print_state(&samples, &labels, &weights, lambda);
+    }
+
+    println!("Correct: {}/{} = {:.2}%", correct, it_count, correct as f64 / it_count as f64 * 100.0);
+
+    fn print_state(samples: &Vec<SamplePoint>, labels: &DVector<f64>, weights: &DVector<f64>, lambda: f64) {
+        println!("Loss: {:.2}", evaluate_loss_n_valued(&samples, &labels, &weights, lambda));
+        println!("Weights:");
+        for i in 0..2 {
+            println!("{:.2} {:.2} {:.2}", weights[i * 3 + 0], weights[i * 3 + 1], weights[i * 3 + 2]);
+        }
+        println!("Labels:");
+        for i in (0..3).step_by(1) {
+            let sum = labels[i * 3 + 0] + labels[i * 3 + 1] + labels[i * 3 + 2];
+            println!("{:.2} {:.2} {:.2} ({:.5})", labels[i * 3 + 0], labels[i * 3 + 1], labels[i * 3 + 2], sum);
+        }
+    }
+}
+
+fn test_2_valued_example() {
+    let mut rng = ChaCha8Rng::seed_from_u64(3);
+
+    let samples = datasets::iris_data_2();
+
+    let (mut labels, mut weights) = datasets::gen_parameter_dual(&samples);
     
     let label_count = labels.len();
 
@@ -52,7 +111,7 @@ fn test_basic_example() {
         let small_samples = vec![samples[zero_var].clone(), samples[one_var].clone()];
         let mut small_labels = DVector::from_vec(vec![0.0, 1.0]);
         
-        gradient_descent(&small_samples, &mut small_labels, &mut weights, &Vec::new(), &linear_equalities, learnrate, lambda);
+        gradient_descent_n_valued(&small_samples, &mut small_labels, &mut weights, &Vec::new(), &linear_equalities, learnrate, lambda);
         
         //Linear constraints for all labels
         linear_equalities.clear();
@@ -62,7 +121,7 @@ fn test_basic_example() {
         
         // println!("Initial weights:");
         // print_vector(&weights);
-        println!("GD1 loss:  {:.2}", evaluate_loss(&samples, &labels, &weights, lambda));
+        // println!("GD1 loss:  {:.2}", evaluate_loss(&samples, &labels, &weights, lambda));
         // println!("Constraints hit: {}", all_constraints_hit(&labels, &Vec::new(), &linear_equalities));
         
         let mut linear_inequalities = is_label_inequalities(label_count);
@@ -75,25 +134,30 @@ fn test_basic_example() {
 
         // println!("Initial labels:");
         // // print_vector(&labels);
-        println!("Lp loss:   {:.2}", evaluate_loss(&samples, &labels, &weights, lambda));
+        // println!("Lp loss:   {:.2}", evaluate_loss(&samples, &labels, &weights, lambda));
 
-        println!("Correct count: {}", evaluate_iris_labels(&mut labels));
+        let cc = evaluate_iris_dual_labels(&mut labels);
+
+        if cc != 100 {
+            println!("Correct count: {}", cc);
+        }
+        // println!("Correct count: {}", evaluate_iris_labels(&mut labels));
 
         // println!("Constraints hit: {}", all_constraints_hit(&labels, &linear_inequalities, &linear_equalities));
 
         //descent(&samples, &mut labels, &mut weights, learnrate, lambda, &linear_inequalities, &mut rng);
-        gradient_descent(&samples, &mut labels, &mut weights, &linear_inequalities, &linear_equalities, learnrate, lambda);
+        gradient_descent_n_valued(&samples, &mut labels, &mut weights, &linear_inequalities, &linear_equalities, learnrate, lambda);
 
-        let correct_count = evaluate_iris_labels(&mut labels);
+        let correct_count = evaluate_iris_dual_labels(&mut labels);
         correct += (correct_count == 100) as i32;
-        println!("GD loss:   {:.2}", evaluate_loss(&samples, &labels, &weights, lambda));
+        // println!("GD loss:   {:.2}", evaluate_loss(&samples, &labels, &weights, lambda));
         // println!("Correct count: {}", correct_count);
     }
 
     println!("Correct: {}/{} = {:.2}%", correct, it_count, correct as f64 / it_count as f64 * 100.0);
 }
 
-fn evaluate_iris_labels(labels: &mut DVector<f64>) -> i32 {
+fn evaluate_iris_dual_labels(labels: &mut DVector<f64>) -> i32 {
     let mut correct_count = 0;
     let mut int_count = 0;
 
@@ -109,15 +173,58 @@ fn evaluate_iris_labels(labels: &mut DVector<f64>) -> i32 {
         }
     }
 
-    // println!("Int count: {}", int_count);
+    println!("Int count: {}", int_count);
 
     correct_count
 }
+
+fn evaluate_iris_labels(labels: &mut DVector<f64>) -> i32 {
+    let mut correct_count = 0;
+    let mut int_count = 0;
+
+    for i in (0..labels.len()).step_by(3) {
+        let mut max_label = usize::MAX;
+        let mut max_val = 0.0;
+        for j in 0..3 {
+            if labels[i + j] > max_val {
+                max_val = labels[i + j];
+                max_label = j;
+            }
+
+            if (labels[i + j] - 0.5).abs() > 0.499 {
+                int_count += 1;
+            }
+        }
+
+        if max_label == i / 50 {
+            correct_count += 1;
+        }
+    }
+
+    println!("Int count: {}", int_count);
+
+    correct_count
+}
+
 
 //Randomizes labels to be uniformly distributed in [0, 1]
 fn randomize_lables(v: &mut DVector<f64>, rng: &mut ChaCha8Rng) {
     for i in 0..v.len() {
         v[i] = rng.gen_range(0.0..1.0);
+    }
+}
+
+fn randmoize_n_labels(v: &mut DVector<f64>, rng: &mut ChaCha8Rng, n: usize) {
+    for i in (0..v.len()).step_by(n) {
+        let mut borders = vec![rng.gen_range(0.0..1.0), rng.gen_range(0.0..1.0)];
+        borders.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        v[i + 0] = borders[0];
+
+        for j in 1..(n - 1) {
+            v[i + j] = borders[j] - borders[j - 1];
+        }
+        v[i + n - 1] = 1.0 - borders[n - 2];
     }
 }
 
@@ -161,6 +268,36 @@ fn set_label_value_one(label_count: usize, index: usize) -> (DVector<f64>, f64) 
     v[index] = 1.0;
     return (v, 1.0); //l_i == 1
 }
+
+fn gradient_descent_n_valued(samples: &Vec<SamplePoint>, labels_pos: &mut DVector<f64>, weights: &mut DVector<f64>, linear_inequalities: &Vec<(DVector<f64>, f64)>, linear_equalities: &Vec<(DVector<f64>, f64)>, learnrate: f64, lambda: f64) {
+    for _ in 0..500 {
+        let (weight_grad, label_grad) = evaluate_grad_n_valued(&samples, &labels_pos, &weights, lambda);
+
+        //Invert direction of gradient
+        let step_length = label_grad.norm();
+        let label_step = -learnrate * label_grad;
+        let eq_projected_step = project_search_direction_eq(&labels_pos, &label_step, &linear_equalities);
+        let projected_step = project_search_direction_ineq(&labels_pos, &eq_projected_step, &linear_inequalities);
+
+        let clipped_step = clip_to_constraint(&labels_pos, &projected_step, &linear_inequalities);
+        let clipped_length = clipped_step.norm();
+        
+        if label_step.norm_squared() < clipped_step.norm_squared() {
+            println!("Overshoot");
+            panic!();
+        }
+
+        // print_vector(&clipped_step);
+        //Update weights and labels
+        *weights -= learnrate * weight_grad;
+        *labels_pos += clipped_step;
+
+
+        println!("{:.2}", evaluate_loss_n_valued(&samples, &labels_pos, &weights, lambda));
+        println!("Step length: {:.5} Clipped length: {:.5}", step_length, clipped_length);
+    }
+}
+
 
 fn gradient_descent(samples: &Vec<SamplePoint>, labels_pos: &mut DVector<f64>, weights: &mut DVector<f64>, linear_inequalities: &Vec<(DVector<f64>, f64)>, linear_equalities: &Vec<(DVector<f64>, f64)>, learnrate: f64, lambda: f64) {
     for _ in 0..1000 {
@@ -212,7 +349,6 @@ fn clip_to_constraint(pos: &DVector<f64>, step: &DVector<f64>, linear_inequaliti
     }
 
     step * min_alpha
-
 }
 
 fn project_search_direction_ineq(pos: &DVector<f64>, step: &DVector<f64>, linear_inequalities: &Vec<(DVector<f64>, f64)>) -> DVector<f64> {
@@ -255,6 +391,7 @@ fn project_search_direction_eq(pos: &DVector<f64>, step: &DVector<f64>, linear_e
 
     if new_step.norm() > step.norm() * 1.0001 {
         println!("Overshoot eq {}", new_step.norm() / step.norm());
+
     }
 
     new_step
