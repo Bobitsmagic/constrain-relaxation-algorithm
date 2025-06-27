@@ -3,21 +3,31 @@ use std::env;
 use datasets::SamplePoint;
 use helper_functions::{evaluate_grad, evaluate_grad_n_valued, evaluate_loss, evaluate_loss_n_valued, logistic_loss, logistic_loss_grad, regularizer_loss, regularizer_loss_grad};
 use nalgebra::{one, DVector};
-use rand::{prelude::Distribution, Rng, SeedableRng};
+use rand::{prelude::Distribution, seq::SliceRandom, Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use rand_distr::Normal;
 
 mod datasets;
 mod lp_solver;
 mod helper_functions;
+mod alternating;
 
 
 fn main() {
     //enable backtrace
     env::set_var("RUST_BACKTRACE", "1");
+
+    let mut rng = ChaCha8Rng::seed_from_u64(3);
+    let mut samples = datasets::iris_data_3();
     
+    
+    for _ in 0..100 {
+        samples.shuffle(&mut rng);
+        alternating::solve_alternating(&samples, 3);
+    }
+
     // test_2_valued_example();
-    test_n_valued_example();
+    // test_n_valued_example();
 }
 
 fn test_n_valued_example() {

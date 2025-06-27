@@ -74,7 +74,7 @@ pub fn iris_data_3() -> Vec<SamplePoint> {
 
     let mut samples = Vec::new();
 
-    for _ in 0..150 {
+    for _ in (0..150).step_by(10) {
         let split = lines.next().unwrap().split(",").collect::<Vec<&str>>();
 
         let mut vals = split.iter().take(4).map(|x| x.parse::<f64>().unwrap()).collect::<Vec<f64>>();
