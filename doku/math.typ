@@ -21,6 +21,26 @@ $
   &min sum_(c in C) sum_(s in S) - dotp(theta_c, x_s) y_(s,c)\
 $
 
+== LP
+
+$
+  &"given" y_(s, c) "and" x_s \
+
+  min &sum_(s in S) sum_(c in C) (1 - y_(s c)) mu^+_(s c) + y_(s c) nu^+_(s c) \
+  "subject to"
+  &forall s in S, c in C: \ 
+  & a + dotp(theta_c, x_s) = mu^+_(s c) - mu^-_(s c)\
+  & a - dotp(theta_c, x_s) = nu^+_(s c) - nu^-_(s c)\
+  & mu^+_(s c), mu^-_(s c), nu^+_(s c), nu^-_(s c) >= 0\
+  
+  min &sum_(s in S) sum_(c in c) z_(s c) \
+  "subject to"
+  &forall s in S, c in C: \
+  & z_(s c) >= 0 \ 
+  & y_(s c) => a + dotp(theta_c, x_s) <= z_(s c)\
+  & not y_(s c) => a - dotp(theta_c, x_s) <= z_(s c)\
+$
+
 == GD
 $
   &"given" y_(s, c) "and" x_s \

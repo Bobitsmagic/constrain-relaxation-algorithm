@@ -3,10 +3,25 @@ use nalgebra::DVector;
 pub fn logistic_loss(r: f64, y: f64) -> f64 {
     -r * y + (1.0 + r.exp()).ln()
 }
+pub fn linear_loss(r: f64, y: f64) -> f64 {
+    let r = r;
+    let lzero = (1.0 + r).max(0.0);
+    let lone = (1.0 - r).max(0.0);
+
+    y * lzero + (1.0 - y) * lone
+}
 
 //loss gradient with respect to r
 pub fn logistic_loss_grad(r: f64, y: f64) -> f64 {
     1.0 / (1.0 + (-r).exp()) - y
+}
+
+//loss gradient with respect to r
+pub fn linear_loss_grad(r: f64, y: f64) -> f64 {
+    let zero_grad = if r >= -1.0 { 1.0 } else { 0.0 };
+    let one_grad = if r <= 1.0 { -1.0 } else { 0.0 };
+
+    y * zero_grad + (1.0 - y) * one_grad
 }
 
 pub fn regularizer_loss(weights: &DVector<f64>) -> f64 {

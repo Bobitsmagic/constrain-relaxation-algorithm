@@ -20,10 +20,46 @@ fn main() {
     let mut rng = ChaCha8Rng::seed_from_u64(3);
     let mut samples = datasets::iris_data_3();
     
-    
-    for _ in 0..100 {
+    let mut losses = Vec::new();
+    let mut best_loss = f64::MAX;
+    for _ in 0..10000 {
         samples.shuffle(&mut rng);
-        alternating::solve_alternating(&samples, 3);
+        let loss = alternating::solve_alternating(&samples, 3, samples.len() / 3);
+
+        losses.push(loss);
+        if loss < best_loss {
+            best_loss = loss;
+            println!("New best loss: {:.5}", best_loss);
+        }
+    }
+
+    let mut min = f64::MAX;
+    let mut max = f64::MIN;
+
+    for &loss in &losses {
+        if loss < min {
+            min = loss;
+        }
+        if loss > max {
+            max = loss;
+        }
+    }
+
+    let mut bins = vec![0; 20];
+    for loss in losses {
+        let index = ((loss - min) / (max - min) * 20.0) as usize;
+        if index < bins.len() {
+            bins[index] += 1;
+        }
+    }
+
+    println!("Losses: min: {:.2}, max: {:.2}", min, max);
+
+    println!("Loss distribution:");
+    for (i, &count) in bins.iter().enumerate() {
+        let range_start = min + (max - min) * i as f64 / 20.0;
+        let range_end = min + (max - min) * (i + 1) as f64 / 20.0;
+        println!("{:.2} - {:.2}: {}", range_start, range_end, count);
     }
 
     // test_2_valued_example();

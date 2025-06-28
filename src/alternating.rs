@@ -1,10 +1,15 @@
 use microlp::{OptimizationDirection, Problem};
-use nalgebra::DVector;
+use nalgebra::{DVector, SimdPartialOrd};
 
 use crate::{datasets::SamplePoint, helper_functions};
 
+pub struct LossFunction {
+    loss: fn(f64, f64) -> f64,
+    loss_grad: fn(f64, f64) -> f64,
+}
+
 //Takes the current weights and return the optimal classification
-pub fn update_ilp(weights: &Vec<SamplePoint>, samples: &Vec<SamplePoint>) -> Vec<usize> {
+pub fn update_ilp(weights: &Vec<SamplePoint>, samples: &Vec<SamplePoint>, lf: &LossFunction, min_class_size: usize) -> Vec<usize> {
     let class_count = weights.len();
 
     let mut problem = Problem::new(OptimizationDirection::Minimize);
@@ -14,8 +19,8 @@ pub fn update_ilp(weights: &Vec<SamplePoint>, samples: &Vec<SamplePoint>) -> Vec
         let mut class_vars = Vec::new();
         for c in 0..class_count {
             let f = s.dot(&weights[c]);
-            let zero_loss = helper_functions::logistic_loss(f, 0.0);
-            let one_loss = helper_functions::logistic_loss(f, 1.0);
+            let zero_loss = (lf.loss)(f, 0.0);
+            let one_loss = (lf.loss)(f, 1.0);
 
             //(1 - y) * zero_loss + y * one_loss = zero_loss + y (one_loss - zero_loss)
             class_vars.push(problem.add_binary_var(one_loss - zero_loss));
@@ -33,13 +38,12 @@ pub fn update_ilp(weights: &Vec<SamplePoint>, samples: &Vec<SamplePoint>) -> Vec
     }
 
     //Even distribution constraint
-    let elements_per_class = samples.len() / class_count;
     for j in 0..class_count {
         let mut constraint = Vec::new();
         for i in 0..samples.len() {
             constraint.push((vars[i][j], 1.0));
         }
-        problem.add_constraint(&constraint, microlp::ComparisonOp::Eq, elements_per_class as f64);
+        problem.add_constraint(&constraint, microlp::ComparisonOp::Ge, min_class_size as f64);
     }
 
     
@@ -59,31 +63,148 @@ pub fn update_ilp(weights: &Vec<SamplePoint>, samples: &Vec<SamplePoint>) -> Vec
     return res;
 }
 
-pub fn update_gd(learnrate: f64, reg_term: f64, weights: &mut Vec<SamplePoint>, samples: &Vec<SamplePoint>, classes: &Vec<usize>) -> f64 {
+pub fn update_lp(weights: &mut Vec<SamplePoint>, samples: &Vec<SamplePoint>, classes: &Vec<usize>, a: f64) -> f64 {
+    let mut problem = Problem::new(OptimizationDirection::Minimize);
+    
+    let class_count = weights.len();
+    let dim_count = samples[0].len();
+
+    
+    let mut weight_vars = Vec::new();
+    for c in 0..class_count {
+        let mut cweight_vars = Vec::new();
+        for d in 0..dim_count {
+            cweight_vars.push(problem.add_var(0.0, (-1.0, 1.0)));
+        }
+        weight_vars.push(cweight_vars);        
+    }
+    
+    let mut cost_vars = Vec::new();
+    for s in 0..samples.len() {
+        let mut cvars = Vec::new();
+        for c in 0..class_count {
+            cvars.push(problem.add_var(1.0, (0.0, f64::INFINITY)));
+        }
+        cost_vars.push(cvars);
+    }
+
+    //Relu constraints
+    for s in 0..samples.len() {
+        for c in 0..class_count {
+            let mut constraint = Vec::new();
+            let sign = if classes[s] == c { 1.0 } else { -1.0 };
+            for d in 0..dim_count {
+                constraint.push((weight_vars[c][d], samples[s][d] * sign));
+            }
+
+            constraint.push((cost_vars[s][c], -1.0)); //Add the z term
+            
+            problem.add_constraint(&constraint, microlp::ComparisonOp::Le, -a);
+        }
+    }
+    
+    let solution = problem.solve().unwrap();
+    
+    for c in 0..class_count {
+        for d in 0..dim_count {
+            weights[c][d] = solution[weight_vars[c][d]];   
+        }
+    }
+    
+    return solution.objective();
+}
+
+pub fn update_lp_mu(weights: &mut Vec<SamplePoint>, samples: &Vec<SamplePoint>, classes: &Vec<usize>, a: f64) -> f64 {
+    let mut problem = Problem::new(OptimizationDirection::Minimize);
+
+    let class_count = weights.len();
+    let dim_count = samples[0].len();
+
+    
+    let mut weight_vars = Vec::new();
+    for c in 0..class_count {
+        let mut cweight_vars = Vec::new();
+        for d in 0..dim_count {
+            cweight_vars.push(problem.add_var(0.0, (-1.0, 1.0)));
+        }
+        weight_vars.push(cweight_vars);        
+    }
+    
+    let mut mu_pluss = Vec::new();
+    let mut mu_minus = Vec::new();
+    for s in 0..samples.len() {
+        let mut cmu_pluss = Vec::new();
+        let mut cmu_minus = Vec::new();
+
+        for c in 0..class_count {
+            cmu_pluss.push(problem.add_var(1.0, (0.0, f64::INFINITY)));
+            cmu_minus.push(problem.add_var(0.0, (0.0, f64::INFINITY)));
+        }
+
+        mu_pluss.push(cmu_pluss);
+        mu_minus.push(cmu_minus);   
+    }
+
+    //Relu constraints
+    for s in 0..samples.len() {
+        for c in 0..class_count {
+            let mut constraint = Vec::new();
+            let sign = if classes[s] == c { 1.0 } else { -1.0 };
+            for d in 0..dim_count {
+                constraint.push((weight_vars[c][d], samples[s][d] * sign));
+            }
+
+            constraint.push((mu_pluss[s][c], -1.0)); 
+            constraint.push((mu_minus[s][c], 1.0)); 
+            
+            problem.add_constraint(&constraint, microlp::ComparisonOp::Eq, -a);
+        }
+    }
+    
+    let res =problem.solve();
+    if res.is_err() {
+        println!("Error solving LP: {:?}", res.err());
+        return f64::MAX; //Return a large value to indicate failure
+    } 
+    
+    let solution = res.unwrap();
+    for c in 0..class_count {
+        for d in 0..dim_count {
+            weights[c][d] = solution[weight_vars[c][d]];   
+        }
+    }
+    
+    return solution.objective();
+}
+
+pub fn update_gd(learnrate: f64, weights: &mut Vec<SamplePoint>, samples: &Vec<SamplePoint>, classes: &Vec<usize>, lf: &LossFunction) -> f64 {
     let class_count = weights.len();
 
     let mut final_grad_norm = 0.0;
     for _ in 0..1000 {
         let mut squared_length = 0.0;
         for c in 0..class_count {
-            let mut grad = weights[c].clone() * reg_term;
+            let mut grad = SamplePoint::zeros(weights[c].len());
 
             for i in 0..samples.len() {
                 let x = &samples[i];
                 let f = x.dot(&weights[c]);
 
                 let y = if classes[i] == c { 1.0 } else { 0.0 };
-                let loss_grad = helper_functions::logistic_loss_grad(f, y);
+                let loss_grad = (lf.loss_grad)(f, y);
 
                 grad += x * loss_grad;
             }
 
             grad *= learnrate;
 
-            squared_length += grad.norm_squared();
-            //Minimize cost
+            squared_length += grad.norm_squared();       
+            
             weights[c] -= grad;
 
+            for v in weights[c].data.as_mut_slice() {
+                *v = v.clamp(-1.0, 1.0);
+            }
         }
 
         final_grad_norm = squared_length.sqrt();
@@ -93,10 +214,10 @@ pub fn update_gd(learnrate: f64, reg_term: f64, weights: &mut Vec<SamplePoint>, 
 }
 
 pub fn evaluate_loss(
-    reg_term: f64,
     samples: &Vec<SamplePoint>,
     classes: &Vec<usize>,
     weights: &Vec<SamplePoint>,
+    lf: &LossFunction,
 ) -> f64 {
     let mut loss = 0.0;
 
@@ -106,34 +227,7 @@ pub fn evaluate_loss(
             let f = x.dot(&weights[c]);
 
             let y = if classes[i] == c { 1.0 } else { 0.0 };
-            loss += helper_functions::logistic_loss(f, y);
-        }
-    }
-
-    //Regularization term
-    for w in weights {
-        loss += helper_functions::regularizer_loss(w) * reg_term;
-    }
-
-    return loss;
-}
-
-pub fn evaluate_linear_loss(
-    samples: &Vec<SamplePoint>,
-    classes: &Vec<usize>,
-    weights: &Vec<SamplePoint>,
-) -> f64 {
-    let mut loss = 0.0;
-
-    for i in 0..samples.len() {
-        let x = &samples[i];
-        for c in 0..weights.len() {
-            let f = x.dot(&weights[c]);
-            loss += if c == classes[i] {
-                (1.0 + f).max(0.0) 
-            } else {
-                (1.0 - f).max(0.0)
-            };
+            loss += (lf.loss)(f, y);
         }
     }
 
@@ -143,53 +237,73 @@ pub fn evaluate_linear_loss(
 pub fn solve_alternating(
     samples: &Vec<SamplePoint>,
     class_count: usize,
-) -> Vec<SamplePoint>{
+    min_class_size: usize,
+) -> f64 {
     let mut weights = vec![SamplePoint::zeros(samples[0].len()); class_count];
-    let mut classes = update_ilp(&weights, samples); //Find initial solution for ilp
+
+    for v in weights.iter_mut() {
+        for v in v.data.as_mut_slice() {
+            *v = rand::random::<f64>() * 2.0 - 1.0; //Initialize weights randomly
+        }
+    }
+
+    let logistic_loss = LossFunction {
+        loss: helper_functions::logistic_loss,
+        loss_grad: helper_functions::logistic_loss_grad,
+    };
+
+    let linear_loss = LossFunction {
+        loss: helper_functions::linear_loss,
+        loss_grad: helper_functions::linear_loss_grad,
+    };
+
+    
+    // optimize_alternating(samples, min_class_size, &mut weights, &logistic_loss);
+
+    optimize_alternating(samples, min_class_size, &mut weights, &linear_loss);
+
+    let classes = update_ilp(&weights, samples, &linear_loss, min_class_size); 
+    let loss = evaluate_loss(samples, &classes, &weights, &linear_loss);
+
+    return loss;
+}
+
+pub fn optimize_alternating(
+    samples: &Vec<SamplePoint>,
+    min_class_size: usize,
+    weights: &mut Vec<SamplePoint>,
+    lf: &LossFunction) -> f64 {
+    
+    let mut classes = update_ilp(&weights, samples, lf, min_class_size); //Find initial solution for ilp
     let mut last_classes = classes.clone(); 
 
-    let mut reg_term = 0.01; //Regularization term
-    let mut learnrate = 0.01;
     let mut last_loss = f64::MAX;
 
     loop {
-        update_gd(learnrate, reg_term, &mut weights, samples, &classes);
+        // update_gd(learnrate, weights, samples, &classes, lf);
+        // let loss = evaluate_loss(samples, &classes, &weights, lf);
+        // println!("Before GD Loss: {:.5}", loss);
+        // let lp_loss = update_lp(weights, samples, &classes, 1.0);
+        let lp_loss = update_lp_mu(weights, samples, &classes, 1.0);
+
+        // println!("Lp loss: {:.5} before Loss: {:.5} after loss: {:.5}", lp_loss, loss, evaluate_loss(samples, &classes, weights, lf));
+
+        // println!("After LP Loss: {:.5}", loss);
 
         //Update classes
-        classes = update_ilp(&weights, samples); //Find initial solution for ilp
+        classes = update_ilp(&weights, samples, lf, min_class_size); //Find initial solution for ilp
         
-        if classes == last_classes {
-            break;
+        
+        let loss = evaluate_loss(samples, &classes, &weights, lf);
+        
+        if classes == last_classes || loss >= last_loss {
+            return loss; //Convergence reached
         }
-        
-        let loss = evaluate_loss(reg_term, samples, &classes, &weights);
-        
-        if loss >= last_loss {
-            println!("Oh no");
-            reg_term *= 1.1; //Increase regularization term
-            learnrate *= 0.9; //Decrease learning rate
-        } else {
-            reg_term *= 0.9; //Decrease regularization term
-            learnrate *= 1.1; //Increase learning rate
-        }
-        
+                
+        // println!("Loss: {:.5}", loss);
         last_loss = loss;
         last_classes = classes.clone();
-    //    println!("Loss: {}", loss);
-
     }
-    // println!("Loss: {}", last_loss);
-
-    let points = samples.iter().map(|x| x.data.as_slice().to_vec()).collect::<Vec<Vec<f64>>>();
-    
-    println!("Linear loss: {}", evaluate_linear_loss(samples, &classes, &weights));
-    let classes = classes.iter().map(|x| *x as u8).collect::<Vec<u8>>();
-    let weight_vec = weights.iter().map(|x| x.data.as_slice().to_vec()).collect::<Vec<Vec<f64>>>();
-    
-    // generate_typst_plotter(&points, &classes, &weight_vec);
-
-    
-    return weights;
 }
 
 pub fn generate_typst_plotter(points: &[Vec<f64>], classes: &[u8], weights: &[Vec<f64>]) {
