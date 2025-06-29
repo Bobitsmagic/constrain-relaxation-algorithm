@@ -1,4 +1,4 @@
-use microlp::{OptimizationDirection, Problem};
+use good_lp::{constraint, default_solver, variable, Expression, IntoAffineExpression, ProblemVariables, Solution, SolverModel};
 use nalgebra::{DVector, SimdPartialOrd};
 
 use crate::{datasets::SamplePoint, helper_functions};
@@ -11,170 +11,132 @@ pub struct LossFunction {
 //Takes the current weights and return the optimal classification
 pub fn update_ilp(weights: &Vec<SamplePoint>, samples: &Vec<SamplePoint>, lf: &LossFunction, min_class_size: usize) -> Vec<usize> {
     let class_count = weights.len();
+    let sample_count = samples.len();
 
-    let mut problem = Problem::new(OptimizationDirection::Minimize);
+    let mut p_vars = ProblemVariables::new();
 
-    let mut vars = Vec::new();
-    for s in samples {
-        let mut class_vars = Vec::new();
-        for c in 0..class_count {
-            let f = s.dot(&weights[c]);
+    // Create binary variables: assign_vars[i][j] = 1 if sample i is assigned to class j
+    let mut assign_vars = Vec::with_capacity(sample_count);
+    for i in 0..sample_count {
+        let mut class_vars = Vec::with_capacity(class_count);
+        for j in 0..class_count {
+            class_vars.push(p_vars.add(variable().binary()));
+        }
+        assign_vars.push(class_vars);
+    }
+
+    // Build the objective function
+    let mut objective: Expression = 0.0.into();
+    for i in 0..sample_count {
+        for j in 0..class_count {
+            let f = samples[i].dot(&weights[j]);
             let zero_loss = (lf.loss)(f, 0.0);
             let one_loss = (lf.loss)(f, 1.0);
-
-            //(1 - y) * zero_loss + y * one_loss = zero_loss + y (one_loss - zero_loss)
-            class_vars.push(problem.add_binary_var(one_loss - zero_loss));
+            // (1 - y) * zero_loss + y * one_loss = zero_loss + y * (one_loss - zero_loss)
+            objective += assign_vars[i][j] * (one_loss - zero_loss);
+            objective += zero_loss;
         }
-        vars.push(class_vars);
     }
 
-    //Single class constraint
-    for i in 0..samples.len() {
-        let mut constraint = Vec::new();
+    // Each sample assigned to exactly one class
+    let mut constraints = Vec::new();
+    for i in 0..sample_count {
+        let mut expr: Expression = 0.0.into();
         for j in 0..class_count {
-            constraint.push((vars[i][j], 1.0));
+            expr += assign_vars[i][j];
         }
-        problem.add_constraint(&constraint, microlp::ComparisonOp::Eq, 1.0);
+        constraints.push(constraint!(expr == 1));
     }
 
-    //Even distribution constraint
+    // Each class has at least min_class_size samples
     for j in 0..class_count {
-        let mut constraint = Vec::new();
-        for i in 0..samples.len() {
-            constraint.push((vars[i][j], 1.0));
+        let mut expr: Expression = 0.0.into();
+        for i in 0..sample_count {
+            expr += assign_vars[i][j];
         }
-        problem.add_constraint(&constraint, microlp::ComparisonOp::Ge, min_class_size as f64);
+        constraints.push(constraint!(expr >= min_class_size as f64));
     }
 
-    
-    let solution = problem.solve().unwrap();
-    let mut res = vec![0; samples.len()];
+    let problem = p_vars.minimise(objective).using(default_solver);
 
-    for i in 0..samples.len() {
+    let sol = problem.with_all(constraints).solve().unwrap();
+
+    let mut res = vec![0; sample_count];
+    for i in 0..sample_count {
         for j in 0..class_count {
-            if solution[vars[i][j]] < 0.5 {
-                continue; //Skip all zero entries
+            if sol.value(assign_vars[i][j]) > 0.5 {
+                res[i] = j;
+                break;
             }
-
-            res[i] = j;
         }
     }
 
-    return res;
+    res
 }
 
 pub fn update_lp(weights: &mut Vec<SamplePoint>, samples: &Vec<SamplePoint>, classes: &Vec<usize>, a: f64) -> f64 {
-    let mut problem = Problem::new(OptimizationDirection::Minimize);
-    
     let class_count = weights.len();
     let dim_count = samples[0].len();
 
-    
+    let mut p_vars = ProblemVariables::new();
+
     let mut weight_vars = Vec::new();
     for c in 0..class_count {
         let mut cweight_vars = Vec::new();
         for d in 0..dim_count {
-            cweight_vars.push(problem.add_var(0.0, (-1.0, 1.0)));
+            cweight_vars.push(p_vars.add(variable().min(-1.0).max(1.0)));
         }
         weight_vars.push(cweight_vars);        
     }
     
+    let mut objective: Expression = 0.0.into_expression();
+
     let mut cost_vars = Vec::new();
     for s in 0..samples.len() {
         let mut cvars = Vec::new();
         for c in 0..class_count {
-            cvars.push(problem.add_var(1.0, (0.0, f64::INFINITY)));
+            let var = p_vars.add(variable().min(0.0));
+
+            objective += var; 
+            cvars.push(var); 
         }
         cost_vars.push(cvars);
     }
 
+    let mut constraints = Vec::new();
     //Relu constraints
     for s in 0..samples.len() {
         for c in 0..class_count {
-            let mut constraint = Vec::new();
+            let mut kek: Expression = 0.0.into_expression();
             let sign = if classes[s] == c { 1.0 } else { -1.0 };
             for d in 0..dim_count {
-                constraint.push((weight_vars[c][d], samples[s][d] * sign));
+                kek += weight_vars[c][d] * samples[s][d] * sign;
             }
 
-            constraint.push((cost_vars[s][c], -1.0)); //Add the z term
+            let z = cost_vars[s][c]; //Add the z term
             
-            problem.add_constraint(&constraint, microlp::ComparisonOp::Le, -a);
+            constraints.push(constraint!(a + kek <= z));
         }
     }
-    
-    let solution = problem.solve().unwrap();
-    
+
+    let mut problem = p_vars.minimise(objective.clone())
+        .using(default_solver);
+        // .set_verbose(false);
+
+    // problem.set_parameter("level", "0");
+
+    let sol = problem
+        .with_all(constraints)
+        .solve()
+        .unwrap();
+
     for c in 0..class_count {
         for d in 0..dim_count {
-            weights[c][d] = solution[weight_vars[c][d]];   
+            weights[c][d] = sol.value(weight_vars[c][d]);   
         }
     }
     
-    return solution.objective();
-}
-
-pub fn update_lp_mu(weights: &mut Vec<SamplePoint>, samples: &Vec<SamplePoint>, classes: &Vec<usize>, a: f64) -> f64 {
-    let mut problem = Problem::new(OptimizationDirection::Minimize);
-
-    let class_count = weights.len();
-    let dim_count = samples[0].len();
-
-    
-    let mut weight_vars = Vec::new();
-    for c in 0..class_count {
-        let mut cweight_vars = Vec::new();
-        for d in 0..dim_count {
-            cweight_vars.push(problem.add_var(0.0, (-1.0, 1.0)));
-        }
-        weight_vars.push(cweight_vars);        
-    }
-    
-    let mut mu_pluss = Vec::new();
-    let mut mu_minus = Vec::new();
-    for s in 0..samples.len() {
-        let mut cmu_pluss = Vec::new();
-        let mut cmu_minus = Vec::new();
-
-        for c in 0..class_count {
-            cmu_pluss.push(problem.add_var(1.0, (0.0, f64::INFINITY)));
-            cmu_minus.push(problem.add_var(0.0, (0.0, f64::INFINITY)));
-        }
-
-        mu_pluss.push(cmu_pluss);
-        mu_minus.push(cmu_minus);   
-    }
-
-    //Relu constraints
-    for s in 0..samples.len() {
-        for c in 0..class_count {
-            let mut constraint = Vec::new();
-            let sign = if classes[s] == c { 1.0 } else { -1.0 };
-            for d in 0..dim_count {
-                constraint.push((weight_vars[c][d], samples[s][d] * sign));
-            }
-
-            constraint.push((mu_pluss[s][c], -1.0)); 
-            constraint.push((mu_minus[s][c], 1.0)); 
-            
-            problem.add_constraint(&constraint, microlp::ComparisonOp::Eq, -a);
-        }
-    }
-    
-    let res =problem.solve();
-    if res.is_err() {
-        println!("Error solving LP: {:?}", res.err());
-        return f64::MAX; //Return a large value to indicate failure
-    } 
-    
-    let solution = res.unwrap();
-    for c in 0..class_count {
-        for d in 0..dim_count {
-            weights[c][d] = solution[weight_vars[c][d]];   
-        }
-    }
-    
-    return solution.objective();
+    return sol.eval(objective);
 }
 
 pub fn update_gd(learnrate: f64, weights: &mut Vec<SamplePoint>, samples: &Vec<SamplePoint>, classes: &Vec<usize>, lf: &LossFunction) -> f64 {
@@ -278,14 +240,17 @@ pub fn optimize_alternating(
     let mut last_classes = classes.clone(); 
 
     let mut last_loss = f64::MAX;
-
+    
+    println!("Initial Loss: {:.5}", evaluate_loss(samples, &classes, weights, lf));
+        
     loop {
         // update_gd(learnrate, weights, samples, &classes, lf);
         // let loss = evaluate_loss(samples, &classes, &weights, lf);
         // println!("Before GD Loss: {:.5}", loss);
         // let lp_loss = update_lp(weights, samples, &classes, 1.0);
-        let lp_loss = update_lp_mu(weights, samples, &classes, 1.0);
+        let lp_loss = update_lp(weights, samples, &classes, 1.0);
 
+        println!("Lp Loss: {:.5}", lp_loss);
         // println!("Lp loss: {:.5} before Loss: {:.5} after loss: {:.5}", lp_loss, loss, evaluate_loss(samples, &classes, weights, lf));
 
         // println!("After LP Loss: {:.5}", loss);
@@ -300,7 +265,7 @@ pub fn optimize_alternating(
             return loss; //Convergence reached
         }
                 
-        // println!("Loss: {:.5}", loss);
+        println!("Loss: {:.5}", loss);
         last_loss = loss;
         last_classes = classes.clone();
     }

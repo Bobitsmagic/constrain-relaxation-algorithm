@@ -70,14 +70,32 @@ pub fn iris_data_2() -> Vec<SamplePoint> {
 }
 
 pub fn iris_data_3() -> Vec<SamplePoint> {
-    let mut lines = include_str!("../data/iris.txt").lines();
+    let mut lines = include_str!("../data/iris.txt").lines().collect::<Vec<_>>();
 
     let mut samples = Vec::new();
 
-    for _ in (0..150).step_by(5) {
-        let split = lines.next().unwrap().split(",").collect::<Vec<&str>>();
+    for i in (0..150).step_by(5) {
+        let split = lines[i].split(",").collect::<Vec<&str>>();
 
         let mut vals = split.iter().take(4).map(|x| x.parse::<f64>().unwrap()).collect::<Vec<f64>>();
+        vals.insert(0, 1.0); //add bias
+
+        samples.push(DVector::from_vec(vals));
+    }
+
+    samples
+}
+
+pub fn load_mnist_data() -> Vec<SamplePoint> {
+    let mut lines = include_str!("../data/mnist_csv/mnist_train.csv").lines().collect::<Vec<_>>();
+
+    let mut samples = Vec::new();
+
+    for i in (0..lines.len()).step_by(5) {
+        let split = lines[i].split(",").collect::<Vec<&str>>();
+
+        let mut vals = split.iter().skip(1).map(|x| x.parse::<f64>().unwrap()).collect::<Vec<f64>>();
+
         vals.insert(0, 1.0); //add bias
 
         samples.push(DVector::from_vec(vals));

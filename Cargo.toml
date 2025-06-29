@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-good_lp = "1.14.0"
-microlp = "0.2.9"
+good_lp = { version = "*", features = ["coin_cbc"], default-features = false }
+
 nalgebra = "0.33.2"
 rand = "0.8.5"
 rand_chacha = "0.3.1"
